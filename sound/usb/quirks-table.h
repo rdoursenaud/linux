@@ -2474,6 +2474,37 @@ YAMAHA_DEVICE(0x7010, "UB99"),
 		.type = QUIRK_MIDI_STANDARD_INTERFACE,
 	}
 },
+/* Radikal Technologies devices */
+{
+	USB_DEVICE_VENDOR_SPEC(0x0a35, 0x002a),
+	.driver_info = (unsigned long) & (const struct snd_usb_audio_quirk) {
+		.vendor_name = "Radikal Technologies",
+		/* .product_name = "SAC-2K", */
+		.ifnum = QUIRK_ANY_INTERFACE,
+		.type = QUIRK_COMPOSITE,
+		.data = (const struct snd_usb_audio_quirk[]) {
+			{
+				.ifnum = 0,
+				.type = QUIRK_IGNORE_INTERFACE
+			},
+			{
+				.ifnum = 1,
+				.type = QUIRK_IGNORE_INTERFACE
+			},
+			{
+				.ifnum = 2,
+				.type = QUIRK_MIDI_RADIKAL,
+				.data = & (const struct snd_usb_midi_endpoint_info) {
+					.out_cables = 0x003f,
+					.in_cables  = 0x003f
+				}
+			},
+			{
+				.ifnum = -1
+			}
+		}
+	}
+},
 
 /* AKAI devices */
 {

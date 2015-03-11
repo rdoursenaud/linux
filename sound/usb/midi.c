@@ -61,7 +61,7 @@
 /*
  * define this to log all USB packets
  */
-/* #define DUMP_PACKETS */
+#define DUMP_PACKETS
 
 /*
  * how long to wait after some USB errors, so that hub_wq can disconnect() us
@@ -1024,6 +1024,108 @@ static struct usb_protocol_ops snd_usbmidi_emagic_ops = {
 	.finish_out_endpoint = snd_usbmidi_emagic_finish_out,
 };
 
+/*
+ * Radikal USB MIDI protocol: raw MIDI with "F5 xx" port switching and "FF" padded data.
+ */
+
+static void snd_usbmidi_radikal_input(struct snd_usb_midi_in_endpoint* ep,
+				     uint8_t* buffer, int buffer_length)
+{
+	int i;
+
+	/* 0xFF indicates end of valid data */
+	for (i = 0; i < buffer_length; ++i)
+		if (buffer[i] == 0xff) {
+			buffer_length = i;
+			break;
+		}
+
+	/* handle 0xF5 at end of last buffer */
+	if (ep->seen_f5)
+		goto switch_port;
+
+	while (buffer_length > 0) {
+		/* determine size of data until next 0xF5 */
+		for (i = 0; i < buffer_length; ++i)
+			if (buffer[i] == 0xf5)
+				break;
+		snd_usbmidi_input_data(ep, ep->current_port, buffer, i);
+		buffer += i;
+		buffer_length -= i;
+
+		if (buffer_length <= 0)
+			break;
+		ep->seen_f5 = 1;
+		++buffer;
+		--buffer_length;
+
+	switch_port:
+		if (buffer_length <= 0)
+			break;
+		if (buffer[0] < 0x80) {
+			ep->current_port = (buffer[0] - 1) & 15;
+			++buffer;
+			--buffer_length;
+		}
+		ep->seen_f5 = 0;
+	}
+}
+
+static void snd_usbmidi_radikal_output(struct snd_usb_midi_out_endpoint* ep,
+				      struct urb *urb)
+{
+	int port0 = ep->current_port;
+	uint8_t* buf = urb->transfer_buffer;
+	int buf_free = ep->max_transfer;
+	int length, i;
+
+	for (i = 0; i < 0x10; ++i) {
+		/* round-robin, starting at the last current port */
+		int portnum = (port0 + i) & 15;
+		struct usbmidi_out_port* port = &ep->ports[portnum];
+
+		if (!port->active)
+			continue;
+		if (snd_rawmidi_transmit_peek(port->substream, buf, 1) != 1) {
+			port->active = 0;
+			continue;
+		}
+
+		if (portnum != ep->current_port) {
+			if (buf_free < 2)
+				break;
+			ep->current_port = portnum;
+			buf[0] = 0xf5;
+			buf[1] = (portnum + 1) & 15;
+			buf += 2;
+			buf_free -= 2;
+		}
+
+		if (buf_free < 1)
+			break;
+		length = snd_rawmidi_transmit(port->substream, buf, buf_free);
+		if (length > 0) {
+			buf += length;
+			buf_free -= length;
+			if (buf_free < 1)
+				break;
+		}
+	}
+
+	/* pad remaining bytes with 0xFF */
+	while (buf_free < ep->max_transfer && buf_free > 0) {
+		*buf = 0xff;
+		++buf;
+		--buf_free;
+	}
+	urb->transfer_buffer_length = ep->max_transfer - buf_free;
+}
+
+static struct usb_protocol_ops snd_usbmidi_radikal_ops = {
+	.input = snd_usbmidi_radikal_input,
+	.output = snd_usbmidi_radikal_output,
+};
+
 
 static void update_roland_altsetting(struct snd_usb_midi *umidi)
 {
@@ -1648,6 +1750,13 @@ static struct port_info {
 	EXTERNAL_PORT(0x086a, 0x0001, 8, "%s Broadcast"),
 	EXTERNAL_PORT(0x086a, 0x0002, 8, "%s Broadcast"),
 	EXTERNAL_PORT(0x086a, 0x0003, 4, "%s Broadcast"),
+	/* Radikal Technologies */
+	CONTROL_PORT(0x0a35, 0x002a, 0, "%s Control"),
+	EXTERNAL_PORT(0x0a35, 0x002a, 1, "%s MIDI"),
+	CONTROL_PORT(0x0a35, 0x002a, 2, "%s Instrument 3"),
+	CONTROL_PORT(0x0a35, 0x002a, 3, "%s Instrument 4"),
+	CONTROL_PORT(0x0a35, 0x002a, 4, "%s Instrument 5"),
+	CONTROL_PORT(0x0a35, 0x002a, 5, "%s Config"),
 	/* Akai MPD16 */
 	CONTROL_PORT(0x09e8, 0x0062, 0, "%s Control"),
 	PORT_INFO(0x09e8, 0x0062, 1, "%s MIDI", 0,
@@ -2349,6 +2458,12 @@ int snd_usbmidi_create(struct snd_card *card,
 		break;
 	case QUIRK_MIDI_EMAGIC:
 		umidi->usb_protocol_ops = &snd_usbmidi_emagic_ops;
+		memcpy(&endpoints[0], quirk->data,
+		       sizeof(struct snd_usb_midi_endpoint_info));
+		err = snd_usbmidi_detect_endpoints(umidi, &endpoints[0], 1);
+		break;
+	case QUIRK_MIDI_RADIKAL:
+		umidi->usb_protocol_ops = &snd_usbmidi_radikal_ops;
 		memcpy(&endpoints[0], quirk->data,
 		       sizeof(struct snd_usb_midi_endpoint_info));
 		err = snd_usbmidi_detect_endpoints(umidi, &endpoints[0], 1);

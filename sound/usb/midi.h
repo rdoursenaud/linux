@@ -35,6 +35,9 @@ struct snd_usb_midi_endpoint_info {
 /* for QUIRK_MIDI_EMAGIC, data points to a snd_usb_midi_endpoint_info
  * structure (out_cables and in_cables only) */
 
+/* for QUIRK_MIDI_RADIKAL, data points to a snd_usb_midi_endpoint_info
+ * structure (out_cables and in_cables only) */
+
 /* for QUIRK_MIDI_CME, data is NULL */
 
 /* for QUIRK_MIDI_AKAI, data is NULL */
